@@ -2,10 +2,12 @@ package com.seryizhe.shenanigans.listeners;
 
 import com.seryizhe.shenanigans.game.GameManager;
 import com.seryizhe.shenanigans.game.GameState;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 public class GameListener implements Listener {
@@ -23,7 +25,7 @@ public class GameListener implements Listener {
 
         if (!gameManager.isPlaying(victim) || !gameManager.isPlaying(attacker)) return;
 
-        // No damage between players during a game — a hit is a tag, not a fight
+        // A hit is a tag, not a fight.
         event.setCancelled(true);
 
         if (gameManager.getState() == GameState.SEEKING
@@ -31,6 +33,17 @@ public class GameListener implements Listener {
                 && gameManager.isHider(victim)) {
             gameManager.caught(victim, attacker);
         }
+    }
+
+    @EventHandler
+    public void onMove(PlayerMoveEvent event) {
+        var player = event.getPlayer();
+        if (!gameManager.isPlaying(player)) return;
+        if (!gameManager.isOutside(player)) return;
+
+        player.teleport(gameManager.getArenaCenter());
+        player.sendMessage(MiniMessage.miniMessage()
+                .deserialize("<red>Stay inside the arena!"));
     }
 
     @EventHandler

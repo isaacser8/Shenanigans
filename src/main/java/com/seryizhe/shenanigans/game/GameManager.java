@@ -5,7 +5,10 @@ import me.libraryaddict.disguise.disguisetypes.DisguiseType;
 import me.libraryaddict.disguise.disguisetypes.MobDisguise;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.block.Biome;
 import org.bukkit.entity.Player;
+import org.bukkit.generator.structure.Structure;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
@@ -44,12 +47,19 @@ public class GameManager {
     private final Set<UUID> hiders = new HashSet<>();
     private final Set<UUID> seekers = new HashSet<>();
 
+    private Location arenaCenter;
+    private int arenaRadius = 50;
+
+    private final List<Location> candidates = new ArrayList<>();
+
     private BukkitTask timerTask;
     private int secondsLeft;
 
     public GameManager(Plugin plugin) {
         this.plugin = plugin;
     }
+
+    // --- state queries ---
 
     public GameState getState() {
         return state;
@@ -67,6 +77,93 @@ public class GameManager {
         return isHider(player) || isSeeker(player);
     }
 
+    // --- arena ---
+
+    public void setArena(Location center, int radius) {
+        this.arenaCenter = center;
+        this.arenaRadius = radius;
+    }
+
+    public Location getArenaCenter() {
+        return arenaCenter;
+    }
+
+    /** True if the player has wandered outside the arena. */
+    public boolean isOutside(Player player) {
+        if (arenaCenter == null) return false;
+        if (!player.getWorld().equals(arenaCenter.getWorld())) return true;
+        return player.getLocation().distance(arenaCenter) > arenaRadius;
+    }
+
+    // --- arena candidates ---
+
+    /**
+     * Finds candidate arenas near the player and stores them for previewing.
+     */
+    public int findCandidates(Player player) {
+        candidates.clear();
+
+        var world = player.getWorld();
+        var origin = player.getLocation();
+
+        // Nearest village, if any — buildings make the best arenas.
+        var villageTypes = List.of(
+                Structure.VILLAGE_PLAINS,
+                Structure.VILLAGE_TAIGA,
+                Structure.VILLAGE_SAVANNA,
+                Structure.VILLAGE_DESERT,
+                Structure.VILLAGE_SNOWY
+        );
+
+        for (var type : villageTypes) {
+            var result = world.locateNearestStructure(origin, type, 100, false);
+            if (result != null && result.getLocation().distance(origin) < 2000) {
+                candidates.add(world.getHighestBlockAt(result.getLocation()).getLocation().add(0, 1, 0));
+            }
+        }
+
+        // Wooded biomes at increasing distances and four compass directions.
+        for (int radius = 100; radius <= 500; radius += 200) {
+            for (int angle = 0; angle < 360; angle += 90) {
+                int x = origin.getBlockX() + (int) (radius * Math.cos(Math.toRadians(angle)));
+                int z = origin.getBlockZ() + (int) (radius * Math.sin(Math.toRadians(angle)));
+
+                if (isWooded(world.getBiome(x, 64, z))) {
+                    candidates.add(world.getHighestBlockAt(x, z).getLocation().add(0, 1, 0));
+                }
+            }
+        }
+
+        return candidates.size();
+    }
+
+    private boolean isWooded(Biome biome) {
+        String name = biome.getKey().getKey();
+        return name.contains("forest")
+                || name.contains("taiga")
+                || name.contains("jungle")
+                || name.contains("grove");
+    }
+
+    public int getCandidateCount() {
+        return candidates.size();
+    }
+
+    /** Teleports the player to candidate number {@code index} (1-based). */
+    public Location visitCandidate(Player player, int index) {
+        if (index < 1 || index > candidates.size()) return null;
+
+        var location = candidates.get(index - 1);
+        player.teleport(location);
+        return location;
+    }
+
+    public List<Location> getCandidates() {
+        return Collections.unmodifiableList(candidates);
+    }
+
+    // --- round lifecycle ---
+
     public boolean join(Player player) {
         if (state != GameState.IDLE) return false;
         return lobby.add(player.getUniqueId());
@@ -74,11 +171,17 @@ public class GameManager {
 
     public boolean start() {
         if (state != GameState.IDLE) return false;
-        if (lobby.size() < 1) return false;
+        if (lobby.size() < 2) return false;
 
-        // Split into roles: roughly one seeker per four players, at least one.
         var players = new ArrayList<>(lobby);
         Collections.shuffle(players);
+
+        if (arenaCenter != null) {
+            for (UUID id : players) {
+                var p = Bukkit.getPlayer(id);
+                if (p != null) p.teleport(arenaCenter);
+            }
+        }
 
         int seekerCount = Math.max(1, players.size() / 4);
         seekers.addAll(players.subList(0, seekerCount));
@@ -87,7 +190,6 @@ public class GameManager {
 
         state = GameState.HIDING;
 
-        // Hiders get a random disguise and are told to run.
         for (UUID id : hiders) {
             var p = Bukkit.getPlayer(id);
             if (p == null) continue;
@@ -98,7 +200,6 @@ public class GameManager {
                     + ". Run and hide!");
         }
 
-        // Seekers are blinded and rooted for the hiding phase.
         for (UUID id : seekers) {
             var p = Bukkit.getPlayer(id);
             if (p == null) continue;
@@ -190,16 +291,17 @@ public class GameManager {
         }
     }
 
+    // --- timer and display ---
+
     private void startTimer(int seconds, Runnable onFinish) {
         cancelTimer();
         secondsLeft = seconds;
         timerTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
             secondsLeft--;
+            updateActionBar();
             if (secondsLeft <= 0) {
                 cancelTimer();
                 onFinish.run();
-            } else if (secondsLeft % 15 == 0 || secondsLeft <= 5) {
-                broadcast(secondsLeft + "s");
             }
         }, 20L, 20L);
     }
@@ -209,6 +311,31 @@ public class GameManager {
             timerTask.cancel();
             timerTask = null;
         }
+    }
+
+    private void updateActionBar() {
+        String text;
+        if (state == GameState.HIDING) {
+            text = "<green>Hiding — " + formatTime(secondsLeft);
+        } else if (state == GameState.SEEKING) {
+            text = "<red>" + hiders.size() + " hiding — " + formatTime(secondsLeft);
+        } else {
+            return;
+        }
+
+        var component = MiniMessage.miniMessage().deserialize(text);
+        for (UUID id : hiders) {
+            var p = Bukkit.getPlayer(id);
+            if (p != null) p.sendActionBar(component);
+        }
+        for (UUID id : seekers) {
+            var p = Bukkit.getPlayer(id);
+            if (p != null) p.sendActionBar(component);
+        }
+    }
+
+    private String formatTime(int seconds) {
+        return String.format("%d:%02d", seconds / 60, seconds % 60);
     }
 
     private void broadcast(String message) {

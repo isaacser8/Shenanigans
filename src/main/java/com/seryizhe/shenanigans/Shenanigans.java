@@ -1,5 +1,7 @@
 package com.seryizhe.shenanigans;
 
+import com.seryizhe.shenanigans.game.GameManager;
+import com.seryizhe.shenanigans.listeners.GameListener;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import me.libraryaddict.disguise.DisguiseAPI;
 import me.libraryaddict.disguise.disguisetypes.DisguiseType;
@@ -14,13 +16,27 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class Shenanigans extends JavaPlugin implements Listener {
 
+    private GameManager gameManager;
+
     @Override
     public void onEnable() {
+        gameManager = new GameManager(this);
+
         Bukkit.getPluginManager().registerEvents(this, this);
+        Bukkit.getPluginManager().registerEvents(new GameListener(gameManager), this);
+
         registerCommand("lightning", this::lightningCommand);
         registerCommand("creepyspawn", this::creepyspawnCommand);
         registerCommand("mobdisguise", this::mobdisguiseCommand);
         registerCommand("mobundisguise", this::mobundisguiseCommand);
+        registerCommand("hs", this::hsCommand);
+    }
+
+    @Override
+    public void onDisable() {
+        if (gameManager != null) {
+            gameManager.end("Server shutting down");
+        }
     }
 
     @EventHandler
@@ -126,5 +142,52 @@ public final class Shenanigans extends JavaPlugin implements Listener {
         DisguiseAPI.undisguiseToAll(player);
         source.sendSuccess(MiniMessage.miniMessage()
                 .deserialize("<green>Removed disguise from <gold>" + player.getName() + "</gold>!"), false);
+    }
+
+    private void hsCommand(CommandSourceStack source, String[] args) {
+        if (args.length < 1) {
+            source.sendFailure(MiniMessage.miniMessage()
+                    .deserialize("<red>Usage: /hs <join|start|stop> [player]"));
+            return;
+        }
+
+        switch (args[0].toLowerCase()) {
+            case "join" -> {
+                if (args.length != 2) {
+                    source.sendFailure(MiniMessage.miniMessage()
+                            .deserialize("<red>Usage: /hs join <player>"));
+                    return;
+                }
+                var player = Bukkit.getPlayer(args[1]);
+                if (player == null) {
+                    source.sendFailure(MiniMessage.miniMessage()
+                            .deserialize("<red>Player not found: " + args[1]));
+                    return;
+                }
+                if (gameManager.join(player)) {
+                    source.sendSuccess(MiniMessage.miniMessage()
+                            .deserialize("<green>" + player.getName() + " joined the lobby"), false);
+                } else {
+                    source.sendFailure(MiniMessage.miniMessage()
+                            .deserialize("<red>Could not join — game may already be running"));
+                }
+            }
+            case "start" -> {
+                if (gameManager.start()) {
+                    source.sendSuccess(MiniMessage.miniMessage()
+                            .deserialize("<green>Game started!"), false);
+                } else {
+                    source.sendFailure(MiniMessage.miniMessage()
+                            .deserialize("<red>Could not start — need 2+ players and no game running"));
+                }
+            }
+            case "stop" -> {
+                gameManager.end("Game stopped");
+                source.sendSuccess(MiniMessage.miniMessage()
+                        .deserialize("<green>Game stopped"), false);
+            }
+            default -> source.sendFailure(MiniMessage.miniMessage()
+                    .deserialize("<red>Unknown subcommand: " + args[0]));
+        }
     }
 }

@@ -1,7 +1,7 @@
-name: PlayerTrolls
+name: Shenanigans
 version: '${version}'
 
-main: com.seryizhe.playerTrolls.PlayerTrolls
+main: com.seryizhe.shenanigans.Shenanigans
 api-version: '26.3'
 load: POSTWORLD
 depend:

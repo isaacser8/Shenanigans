@@ -1,6 +1,5 @@
-package com.seryizhe.playerTrolls;
+package com.seryizhe.shenanigans;
 
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import me.libraryaddict.disguise.DisguiseAPI;
 import me.libraryaddict.disguise.disguisetypes.DisguiseType;
@@ -13,7 +12,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
-public final class PlayerTrolls extends JavaPlugin implements Listener {
+public final class Shenanigans extends JavaPlugin implements Listener {
 
     @Override
     public void onEnable() {

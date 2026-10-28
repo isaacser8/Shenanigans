@@ -1,7 +1,7 @@
 package com.seryizhe.shenanigans.listeners;
 
-import com.seryizhe.shenanigans.game.GameManager;
-import com.seryizhe.shenanigans.game.GameState;
+import com.seryizhe.shenanigans.game.GameHost;
+import com.seryizhe.shenanigans.game.games.HideAndSeek;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -12,42 +12,41 @@ import org.bukkit.event.player.PlayerQuitEvent;
 
 public class GameListener implements Listener {
 
-    private final GameManager gameManager;
+    private final GameHost host;
 
-    public GameListener(GameManager gameManager) {
-        this.gameManager = gameManager;
+    public GameListener(GameHost host) {
+        this.host = host;
     }
 
     @EventHandler
     public void onDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
         if (!(event.getDamager() instanceof Player attacker)) return;
-
-        if (!gameManager.isPlaying(victim) || !gameManager.isPlaying(attacker)) return;
+        if (!host.isPlaying(victim) || !host.isPlaying(attacker)) return;
 
         // A hit is a tag, not a fight.
         event.setCancelled(true);
 
-        if (gameManager.getState() == GameState.SEEKING
-                && gameManager.isSeeker(attacker)
-                && gameManager.isHider(victim)) {
-            gameManager.caught(victim, attacker);
+        // Only hide and seek cares about tagging, for now.
+        if (host.getGame() instanceof HideAndSeek game
+                && game.isSeeker(attacker) && game.isHider(victim)) {
+            game.caught(victim, attacker);
         }
     }
 
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
         var player = event.getPlayer();
-        if (!gameManager.isPlaying(player)) return;
-        if (!gameManager.isOutside(player)) return;
+        if (!host.isPlaying(player)) return;
+        if (!host.isOutside(player)) return;
 
-        player.teleport(gameManager.getArenaCenter());
+        player.teleport(host.getArenaCenter());
         player.sendMessage(MiniMessage.miniMessage()
                 .deserialize("<red>Stay inside the arena!"));
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        gameManager.remove(event.getPlayer());
+        host.remove(event.getPlayer());
     }
 }

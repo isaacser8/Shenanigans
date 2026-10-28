@@ -1,8 +1,11 @@
 package com.seryizhe.shenanigans.commands;
 
-import com.seryizhe.shenanigans.game.GameManager;
+import com.seryizhe.shenanigans.game.ArenaFinder;
+import com.seryizhe.shenanigans.game.GameHost;
+import com.seryizhe.shenanigans.game.MinigameRegistry;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import static com.seryizhe.shenanigans.commands.TrollCommands.fail;
@@ -11,28 +14,67 @@ import static com.seryizhe.shenanigans.commands.TrollCommands.resolve;
 
 public class GameCommand {
 
-    private final GameManager game;
+    private final GameHost host;
+    private final MinigameRegistry registry;
+    private final ArenaFinder finder = new ArenaFinder();
 
-    public GameCommand(GameManager game) {
-        this.game = game;
+    public GameCommand(GameHost host, MinigameRegistry registry) {
+        this.host = host;
+        this.registry = registry;
     }
 
     public void execute(CommandSourceStack source, String[] args) {
         if (args.length < 1) {
-            fail(source, "Usage: /hs <join|start|stop|findarena|list|visit|setarena>");
+            fail(source, "Usage: /mg <games|select|join|start|stop|findarena|list|visit|setarena|setlobby>");
             return;
         }
 
         switch (args[0].toLowerCase()) {
+            case "games" -> games(source);
+            case "select" -> select(source, args);
             case "join" -> join(source, args);
-            case "start" -> start(source);
+            case "start" -> start(source.getSender());
             case "stop" -> stop(source);
             case "findarena" -> findArena(source);
-            case "list" -> list(source);
+            case "list" -> listCandidates(source);
             case "visit" -> visit(source, args);
             case "setarena" -> setArena(source, args);
+            case "setlobby" -> setLobby(source);
             default -> fail(source, "Unknown subcommand: " + args[0]);
         }
+    }
+
+    private void games(CommandSourceStack source) {
+        var sb = new StringBuilder("<yellow>Available games:");
+        for (var entry : registry.getAll().entrySet()) {
+            sb.append("\n<white>").append(entry.getKey())
+                    .append(" <gray>— ").append(entry.getValue().getName());
+        }
+        source.sendSuccess(MiniMessage.miniMessage().deserialize(sb.toString()), false);
+    }
+
+    private void select(CommandSourceStack source, String[] args) {
+        if (args.length != 2) {
+            fail(source, "Usage: /mg select <game>");
+            return;
+        }
+
+        select(source.getSender(), args[1]);
+    }
+
+    public boolean select(CommandSender sender, String id) {
+        var game = registry.get(id);
+        if (game == null) {
+            fail(sender, "No such game: " + id + " — try /mg games");
+            return false;
+        }
+
+        if (!host.select(game)) {
+            fail(sender, "Can't switch games mid-round");
+            return false;
+        }
+        ok(sender, "Selected " + game.getName());
+        return true;
     }
 
     private void join(CommandSourceStack source, String[] args) {
@@ -41,47 +83,74 @@ public class GameCommand {
             player = resolve(source, args[1]);
             if (player == null) return;
         } else {
-            player = asPlayer(source, "Usage from console: /hs join <player>");
+            player = asPlayer(source, "Usage from console: /mg join <player>");
             if (player == null) return;
         }
 
-        if (game.join(player)) {
-            ok(source, player.getName() + " joined the lobby");
+        join(source.getSender(), player);
+    }
+
+    public void join(CommandSender sender, Player player) {
+        if (host.join(player)) {
+            ok(sender, player.getName() + " joined the lobby (" + host.getLobbySize() + ")");
         } else {
-            fail(source, "Could not join — game may already be running");
+            fail(sender, "Could not join — a game may already be running");
         }
     }
 
-    private void start(CommandSourceStack source) {
-        if (game.start()) {
-            ok(source, "Game started!");
+    public void start(CommandSender sender) {
+        if (host.getGame() == null) {
+            fail(sender, "No game selected — use /mg select <game>");
+            return;
+        }
+
+        if (host.start()) {
+            ok(sender, host.getGame().getName() + " started!");
         } else {
-            fail(source, "Could not start — need 2+ players and no game running");
+            fail(sender, "Could not start — need " + host.getGame().getMinPlayers()
+                    + "+ players and no game running");
         }
     }
 
     private void stop(CommandSourceStack source) {
-        game.end("Game stopped");
+        host.end("Game stopped");
         ok(source, "Game stopped");
     }
 
     private void findArena(CommandSourceStack source) {
         var player = asPlayer(source, "Run this in game");
-        if (player == null) return;
-
-        int found = game.findCandidates(player);
-        if (found == 0) {
-            fail(source, "No candidates found — use /hs setarena here instead");
-            return;
-        }
-
-        ok(source, "Found " + found + " candidates. Use /hs list to see them, /hs visit <n> to tour.");
+        if (player != null) findArena(player);
     }
 
-    private void list(CommandSourceStack source) {
-        var candidates = game.getCandidates();
+    /** Returns how many suitable candidates were found. */
+    public int findArena(Player player) {
+        if (host.getGame() == null) {
+            fail(player, "No game selected — each game judges arenas differently");
+            return 0;
+        }
+
+        var name = host.getGame().getName();
+        int suitable = finder.find(player, host.getGame());
+        int raw = finder.getRawCount();
+        if (raw == 0) {
+            fail(player, "No spots found nearby — use /mg setarena here instead");
+            return 0;
+        }
+        if (suitable == 0) {
+            fail(player, "Found " + raw + " spots, but none suitable for " + name
+                    + " — use /mg setarena here instead");
+            return 0;
+        }
+
+        ok(player, "Found " + raw + " spots, " + suitable + " suitable for " + name
+                + ". /mg list to see them, /mg visit <n> to tour.");
+        return suitable;
+    }
+
+    private void listCandidates(CommandSourceStack source) {
+        var candidates = finder.getCandidates();
         if (candidates.isEmpty()) {
-            fail(source, "No candidates — run /hs findarena first");
+            fail(source, "No candidates — run /mg findarena first");
             return;
         }
 
@@ -100,16 +169,29 @@ public class GameCommand {
         var player = asPlayer(source, "Run this in game");
         if (player == null) return;
 
-        Integer index = parseInt(source, args, 1, "Usage: /hs visit <number>");
+        Integer index = parseInt(source, args, 1, "Usage: /mg visit <number>");
         if (index == null) return;
 
-        var location = game.visitCandidate(player, index);
+        visit(player, index);
+    }
+
+    public void visit(Player player, int index) {
+        var location = finder.visit(player, index);
         if (location == null) {
-            fail(source, "No candidate " + index + " — there are " + game.getCandidateCount());
+            fail(player, "No candidate " + index + " — there are " + finder.size());
             return;
         }
 
-        ok(source, "Candidate " + index + " — " + location.getBlock().getBiome().getKey().getKey());
+        ok(player, "Candidate " + index + " — " + location.getBlock().getBiome().getKey().getKey());
+    }
+
+    /** Visits the candidate after the last one visited, wrapping at the end. */
+    public void visitNext(Player player) {
+        if (finder.size() == 0) {
+            fail(player, "No candidates — run /mg findarena first");
+            return;
+        }
+        visit(player, finder.nextIndex());
     }
 
     private void setArena(CommandSourceStack source, String[] args) {
@@ -123,13 +205,22 @@ public class GameCommand {
             radius = parsed;
         }
 
-        game.setArena(player.getLocation(), radius);
-        ok(source, "Arena set here, radius " + radius);
+        setArena(player, radius);
     }
 
-    // --- helpers ---
+    public void setArena(Player player, int radius) {
+        host.setArena(player.getLocation(), radius);
+        ok(player, "Arena set here, radius " + radius);
+    }
 
-    /** Returns the sender as a Player, or null (with a message) if it's the console. */
+    private void setLobby(CommandSourceStack source) {
+        var player = asPlayer(source, "Run this in game, standing at the lobby spawn");
+        if (player == null) return;
+
+        host.setLobbySpawn(player.getLocation());
+        ok(source, "Lobby spawn set here");
+    }
+
     private Player asPlayer(CommandSourceStack source, String message) {
         if (source.getSender() instanceof Player p) return p;
         fail(source, message);

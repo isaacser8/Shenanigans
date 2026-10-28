@@ -6,6 +6,7 @@ import me.libraryaddict.disguise.disguisetypes.DisguiseType;
 import me.libraryaddict.disguise.disguisetypes.MobDisguise;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 
@@ -96,5 +97,13 @@ public class TrollCommands {
 
     static void fail(CommandSourceStack source, String message) {
         source.sendFailure(MiniMessage.miniMessage().deserialize("<red>" + message));
+    }
+
+    static void ok(CommandSender sender, String message) {
+        sender.sendMessage(MiniMessage.miniMessage().deserialize("<green>" + message));
+    }
+
+    static void fail(CommandSender sender, String message) {
+        sender.sendMessage(MiniMessage.miniMessage().deserialize("<red>" + message));
     }
 }
